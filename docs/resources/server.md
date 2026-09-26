@@ -1,0 +1,45 @@
+---
+page_title: "caddy_server Resource - caddy"
+subcategory: ""
+description: |-
+  A Caddy HTTP server (apps.http.servers). Sites and routes attach to this listener.
+---
+
+# Resource: caddy_server
+
+A Caddy HTTP server (`apps.http.servers`). Sites and routes attach to this listener.
+
+## Example Usage
+
+```terraform
+resource "caddy_server" "https" {
+  name   = "https"
+  listen = [":443"]
+}
+```
+
+## Schema
+
+### Required
+
+- `listen` (List of String) Listener addresses, e.g. `:443` or `:80`.
+- `name` (String) Server key under `apps.http.servers` and `@id`. Changing this forces replacement.
+
+### Optional
+
+- `disable_auto_https` (Boolean) Disable automatic HTTPS entirely on this server.
+- `disable_certificates` (Boolean) Skip certificate automation only.
+- `disable_redirects` (Boolean) Keep automatic certs but skip HTTP→HTTPS redirects.
+- `protocols` (List of String) Allowed HTTP protocols (`h1`, `h2`, `h2c`, `h3`).
+
+### Read-Only
+
+- `id` (String) Caddy `@id`, equal to `name`.
+
+## Import
+
+The ID is the key under `apps.http.servers` (Caddyfile-adapted configs often use `srv0`).
+
+```shell
+tofu import caddy_server.https srv0
+```
