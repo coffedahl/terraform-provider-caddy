@@ -27,7 +27,7 @@ jobs:
       - name: Run linters
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          version: v2.14.0
 
   unit:
     name: Unit tests
@@ -41,8 +41,44 @@ jobs:
           cache: true
       - run: go test -v -cover -timeout=120s -parallel=10 ./...
 
+  acceptance:
+    name: Acceptance (OpenTofu ${{ matrix.tofu }}, Caddy ${{ matrix.caddy }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest and newest supported versions.
+        tofu: ['~1.6.0', 'latest']
+        caddy: ['2.8', '2']
+    services:
+      caddy:
+        image: caddy:${{ matrix.caddy }}
+        env:
+          CADDY_ADMIN: 0.0.0.0:2019
+        ports:
+          - 2019:2019
+    env:
+      TF_ACC: '1'
+      # GitHub runs jobs on the host, so the service is on a mapped port.
+      # Gitea's act_runner runs jobs in a container next to the service.
+      CADDY_ENDPOINT: ${{ github.server_url == 'https://github.com' && 'http://127.0.0.1:2019' || 'http://caddy:2019' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ matrix.tofu }}
+          tofu_wrapper: false
+      - run: TF_ACC_TERRAFORM_PATH="$(command -v tofu)" go test -v -cover -timeout 15m ./internal/provider/ -run '^TestAcc'
+
   generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

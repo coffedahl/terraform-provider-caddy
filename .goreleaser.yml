@@ -1,6 +1,9 @@
-# Pin to GoReleaser v2.14.x in CI. v2.15.0+ has been observed to invalidate
-# checksum signatures that OpenTofu/Terraform registries verify.
+# Release artifacts must follow the registry naming contract:
+# terraform-provider-caddy_{version}_{os}_{arch}.zip plus _SHA256SUMS,
+# _SHA256SUMS.sig and _manifest.json. The GoReleaser version is pinned in
+# .github/workflows/release.yml.
 version: 2
+project_name: terraform-provider-caddy
 before:
   hooks:
     - go mod tidy
@@ -11,7 +14,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - '-s -w -X main.version={{.Version}} -X main.commit={{.Commit}}'
+      - '-s -w -X main.version={{.Version}}'
     goos:
       - freebsd
       - windows
