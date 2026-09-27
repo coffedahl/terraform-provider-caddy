@@ -6,8 +6,8 @@ Use it to declare HTTP servers, wildcard (and ordinary) sites, nested routes, re
 
 ## Requirements
 
-- OpenTofu >= 1.6 or Terraform >= 1.5
-- Caddy 2.8+ with the Admin API enabled (2.10+ recommended)
+- OpenTofu >= 1.6 (tested in CI with 1.6 and the latest release). Terraform >= 1.5 should work too, but is not tested.
+- Caddy 2.8+ with the Admin API enabled (tested with 2.8 and the latest 2.x; 2.10+ recommended)
 - For wildcard certificates: Caddy built with a [caddy-dns](https://github.com/caddy-dns) module (`xcaddy build --with github.com/caddy-dns/<provider>`)
 
 ## Persistence
@@ -36,7 +36,8 @@ curl -s http://127.0.0.1:2019/config/admin | jq
 terraform {
   required_providers {
     caddy = {
-      source = "coffedahl/caddy"
+      source  = "coffedahl/caddy"
+      version = "~> 0.1"
     }
   }
 }
@@ -97,7 +98,9 @@ Caddy must already be running. The provider does not install or start Caddy.
 |---|---|
 | `unix:///run/caddy/admin.sock` | Production (recommended) |
 | `http://127.0.0.1:2019` | Local default |
-| `https://admin.example.com:2021` | Caddy remote admin with mTLS |
+| `https://admin.example.com` | Admin API behind your own TLS reverse proxy |
+
+Caddy's built-in remote admin (`admin.remote`, mutual TLS) is not supported yet: the provider cannot present a client certificate.
 
 Set `CADDY_ENDPOINT` or `CADDY_ADMIN` instead of the provider argument if you prefer.
 
@@ -139,7 +142,7 @@ Importing a site by `{server}/{index}` assigns an `@id` on the live route so lat
 | `caddy_handle` | Extra handle on a site (`for_each`) |
 | `caddy_tls_policy` | Global TLS automation / on-demand `ask` |
 
-Data sources: `caddy_config`, `caddy_upstream_status`.
+Data sources: `caddy_config`, `caddy_upstream_status`, `caddy_inventory`.
 
 ## TLS
 
@@ -153,16 +156,30 @@ Never point production at the Let's Encrypt production CA from a test loop. Use 
 ## Development
 
 ```
-make test
-TF_ACC=1 CADDY_ENDPOINT=http://127.0.0.1:2019 make testacc
-make generate
+make test        # unit tests
+make lint
+make generate    # regenerate docs/ from templates/, examples/ and the schema
 ```
 
-Acceptance tests skip if the Admin API is not reachable.
+Acceptance tests need a disposable Caddy. They create and delete real config, so never point them at a production instance:
 
-## Publishing
+```
+docker run -d --rm --name caddy-acc -p 127.0.0.1:2019:2019 -e CADDY_ADMIN=0.0.0.0:2019 caddy:2
+TF_ACC=1 CADDY_ENDPOINT=http://127.0.0.1:2019 make testacc
+```
 
-Releases are signed zip artifacts produced by GoReleaser (see `.github/workflows/release.yml`). Submit the GitHub repo and GPG key through the [OpenTofu Registry issue forms](https://github.com/opentofu/registry) — not a pull request.
+With `TF_ACC` set, the tests fail rather than skip when the Admin API is unreachable. `TestAccSiteCertificateFile` also needs `CADDY_TEST_CERT_DIR` pointing at a directory, as Caddy sees it, containing `cert.pem` and `key.pem`.
+
+`docs/` is generated. Edit `templates/`, `examples/` or the schema descriptions and run `make generate`.
+
+## Releasing
+
+The OpenTofu registry indexes GitHub releases of `coffedahl/terraform-provider-caddy`. Pushing a `vX.Y.Z` tag there runs `.github/workflows/release.yml`, which builds, checksums, signs and publishes the release with GoReleaser; the registry picks up new tags on its own. Published versions are immutable, so fix mistakes with a new version.
+
+1. Add the change to `CHANGELOG.md`.
+2. `git tag v0.1.0 && git push origin v0.1.0` (to GitHub).
+
+Signing needs the `GPG_PRIVATE_KEY` and `PASSPHRASE` repository secrets, and the public key must be registered with the [OpenTofu registry](https://github.com/opentofu/registry/issues/new?template=provider_key.yml).
 
 ## License
 

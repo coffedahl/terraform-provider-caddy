@@ -131,7 +131,7 @@ func (r *serverResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 	raw, _, err := r.client.Get(ctx, "/config/apps/http/servers/"+url.PathEscape(data.Name.ValueString()))
-	if client.IsNotFound(err) {
+	if client.IsMissing(err) {
 		resp.State.RemoveResource(ctx)
 		return
 	}
@@ -197,7 +197,7 @@ func (r *serverResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		return
 	}
 	err := r.client.Delete(ctx, "/config/apps/http/servers/"+url.PathEscape(data.Name.ValueString()))
-	if err != nil && !client.IsNotFound(err) {
+	if err != nil && !client.IsMissing(err) {
 		resp.Diagnostics.AddError("Delete caddy_server", err.Error())
 	}
 }

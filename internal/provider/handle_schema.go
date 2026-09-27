@@ -4,9 +4,11 @@
 package provider
 
 import (
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -122,6 +124,9 @@ func handleNestedBlocks(includeName bool) map[string]schema.Block {
 			Optional:            true,
 			Computed:            true,
 			MarkdownDescription: "Optional 0-based insert index. Omit it to keep the current order (or append when creating). Do not set every handle to 0.",
+			Validators: []validator.Int64{
+				int64validator.AtLeast(0),
+			},
 		},
 		"abort": schema.BoolAttribute{
 			Optional:            true,
@@ -398,6 +403,8 @@ func issuerBlock() schema.ListNestedBlock {
 			Attributes: map[string]schema.Attribute{
 				"module": schema.StringAttribute{
 					Optional:            true,
+					Computed:            true,
+					Default:             stringdefault.StaticString("acme"),
 					MarkdownDescription: "Issuer module. Defaults to `acme`.",
 				},
 				"ca": schema.StringAttribute{

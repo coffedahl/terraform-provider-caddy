@@ -346,47 +346,22 @@ func IsPreconditionFailed(err error) bool {
 	return ok && e.Status == http.StatusPreconditionFailed
 }
 
-// EnsurePersist turns on Admin API config persistence if it was explicitly
-// disabled. Caddy writes the live JSON to autosave.json; a Caddyfile
-// `caddy reload` still overwrites that on start unless `--resume` is used.
-func (c *Client) EnsurePersist(ctx context.Context) error {
-	return c.Locked(func() error {
-		raw, _, err := c.getUnlocked(ctx, "/config/admin")
-		if err != nil && !IsMissing(err) {
-			return err
-		}
-		admin, _ := decodeObject(raw)
-		if admin != nil {
-			if cfg, ok := admin["config"].(map[string]any); ok {
-				if persist, ok := cfg["persist"].(bool); ok && persist {
-					return nil
-				}
-				if _, exists := cfg["persist"]; !exists {
-					return nil // Caddy default is persist on
-				}
-			} else if admin["config"] == nil {
-				return nil
-			}
-		}
-		if err := c.doUnlocked(ctx, http.MethodPut, "/config/admin/config/persist", true, ""); err != nil {
-			if IsMissing(err) {
-				return c.doUnlocked(ctx, http.MethodPut, "/config/admin/config", map[string]any{"persist": true}, "")
-			}
-			return err
-		}
-		return nil
-	})
-}
-
-func decodeObject(raw json.RawMessage) (map[string]any, error) {
-	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
-		return nil, nil
+// PersistEnabled reports whether Caddy saves API changes to its autosave
+// file. Persistence is on unless admin.config.persist is explicitly false.
+// It only reads, so it is safe to call during plan.
+func (c *Client) PersistEnabled(ctx context.Context) (bool, error) {
+	raw, _, err := c.Get(ctx, "/config/admin/config/persist")
+	if IsMissing(err) {
+		return true, nil
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, err
+	if err != nil {
+		return false, err
 	}
-	return obj, nil
+	var persist *bool
+	if err := json.Unmarshal(raw, &persist); err != nil {
+		return false, fmt.Errorf("decode admin.config.persist: %w", err)
+	}
+	return persist == nil || *persist, nil
 }
 
 // EnsureHTTPApp makes sure apps.http.servers exists without wiping servers.

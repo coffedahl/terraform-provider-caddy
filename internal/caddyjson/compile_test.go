@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+// as asserts v has type T, failing the test instead of panicking.
+func as[T any](t *testing.T, v any) T {
+	t.Helper()
+	got, ok := v.(T)
+	if !ok {
+		t.Fatalf("expected %T, got %T (%v)", *new(T), v, v)
+	}
+	return got
+}
+
 func TestValidateHost(t *testing.T) {
 	t.Parallel()
 	ok := []string{"example.com", "foo.example.com", "*.example.com", "*"}
@@ -65,24 +75,24 @@ func TestCompileWildcardSite(t *testing.T) {
 	if decoded["terminal"] != true {
 		t.Fatal("expected terminal")
 	}
-	match := decoded["match"].([]any)[0].(map[string]any)
-	hosts := match["host"].([]any)
+	match := as[map[string]any](t, as[[]any](t, decoded["match"])[0])
+	hosts := as[[]any](t, match["host"])
 	if hosts[0] != "*.example.com" {
 		t.Fatalf("host = %v", hosts)
 	}
-	handle := decoded["handle"].([]any)[0].(map[string]any)
+	handle := as[map[string]any](t, as[[]any](t, decoded["handle"])[0])
 	if handle["handler"] != "subroute" {
 		t.Fatalf("handler = %v", handle["handler"])
 	}
-	routes := handle["routes"].([]any)
+	routes := as[[]any](t, handle["routes"])
 	if len(routes) != 3 {
 		t.Fatalf("routes = %d", len(routes))
 	}
-	first := routes[0].(map[string]any)
+	first := as[map[string]any](t, routes[0])
 	if first["@id"] != "apps-wildcard__h0" {
 		t.Fatalf("nested id = %v", first["@id"])
 	}
-	inner := first["handle"].([]any)[0].(map[string]any)
+	inner := as[map[string]any](t, as[[]any](t, first["handle"])[0])
 	if inner["handler"] != "reverse_proxy" {
 		t.Fatalf("inner handler = %v", inner["handler"])
 	}
@@ -97,8 +107,8 @@ func TestCompileReverseProxyTLSSkipVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport := h["transport"].(map[string]any)
-	tls := transport["tls"].(map[string]any)
+	transport := as[map[string]any](t, h["transport"])
+	tls := as[map[string]any](t, transport["tls"])
 	if tls["insecure_skip_verify"] != true {
 		t.Fatalf("tls = %#v", tls)
 	}
@@ -125,10 +135,10 @@ func TestCompileTLSPolicyDNS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuers := got["issuers"].([]map[string]any)
-	challenges := issuers[0]["challenges"].(map[string]any)
-	dns := challenges["dns"].(map[string]any)
-	provider := dns["provider"].(map[string]any)
+	issuers := as[[]map[string]any](t, got["issuers"])
+	challenges := as[map[string]any](t, issuers[0]["challenges"])
+	dns := as[map[string]any](t, challenges["dns"])
+	provider := as[map[string]any](t, dns["provider"])
 	if provider["name"] != "cloudflare" {
 		t.Fatalf("provider = %v", provider)
 	}
@@ -185,7 +195,7 @@ func TestCompileRedir(t *testing.T) {
 	if h["handler"] != "static_response" {
 		t.Fatal(h)
 	}
-	headers := h["headers"].(map[string][]string)
+	headers := as[map[string][]string](t, h["headers"])
 	if headers["Location"][0] != "https://example.com{http.request.uri}" {
 		t.Fatal(headers)
 	}
@@ -210,9 +220,9 @@ func TestCompileTryFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	match := got["match"].([]map[string]any)[0]
-	file := match["file"].(map[string]any)
-	try := file["try_files"].([]string)
+	match := as[[]map[string]any](t, got["match"])[0]
+	file := as[map[string]any](t, match["file"])
+	try := as[[]string](t, file["try_files"])
 	if try[1] != "/index.html" {
 		t.Fatal(try)
 	}

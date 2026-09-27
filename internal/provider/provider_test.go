@@ -39,8 +39,10 @@ func testAccPreCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// TF_ACC is set whenever this runs, so an unreachable Caddy is a failure,
+	// not a skip: a skipped acceptance run would look green in CI.
 	if err := c.Ping(context.Background()); err != nil {
-		t.Skipf("Caddy Admin API not reachable at %s: %v", endpoint, err)
+		t.Fatalf("Caddy Admin API not reachable at %s: %v", endpoint, err)
 	}
 }
 

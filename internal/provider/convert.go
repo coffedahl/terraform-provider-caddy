@@ -305,6 +305,32 @@ func handleFromJSON(ctx context.Context, h caddyjson.Handle) (handleModel, diag.
 	return m, diags
 }
 
+// settledPriority returns the priority to keep in state. A configured
+// priority is an insert index that Caddy clamps to the list length, so it
+// stays as configured while the object sits where that index puts it;
+// otherwise the live index is recorded so drift shows up in the plan.
+func settledPriority(prior types.Int64, actual, count int) types.Int64 {
+	if !prior.IsNull() && !prior.IsUnknown() {
+		want := int(prior.ValueInt64())
+		if want > count-1 {
+			want = count - 1
+		}
+		if want == actual {
+			return prior
+		}
+	}
+	return types.Int64Value(int64(actual))
+}
+
+// appliedPriority is the state value after a write: the configured priority
+// when set, else the index the object landed at.
+func appliedPriority(config types.Int64, index int) types.Int64 {
+	if !config.IsNull() && !config.IsUnknown() {
+		return config
+	}
+	return types.Int64Value(int64(index))
+}
+
 func configInsertIndex(v types.Int64) int {
 	if v.IsNull() || v.IsUnknown() {
 		return caddyjson.PriorityUnspecified
@@ -362,7 +388,26 @@ func tlsFromJSON(ctx context.Context, t *caddyjson.TLS) ([]tlsModel, diag.Diagno
 		CertificateFile: stringOrNull(t.CertificateFile),
 		KeyFile:         stringOrNull(t.KeyFile),
 	}
+	issuers, d := issuersFromJSON(ctx, t.Issuers, true)
+	diags.Append(d...)
+	m.Issuers = issuers
 	for _, iss := range t.Issuers {
+		if iss.Module == "internal" {
+			m.Internal = types.BoolValue(true)
+		}
+	}
+	return []tlsModel{m}, diags
+}
+
+// issuersFromJSON converts parsed issuers to models. Site tls blocks model the
+// internal issuer as `internal = true`, so they pass skipInternal.
+func issuersFromJSON(ctx context.Context, issuers []caddyjson.Issuer, skipInternal bool) ([]issuerModel, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	out := make([]issuerModel, 0, len(issuers))
+	for _, iss := range issuers {
+		if skipInternal && iss.Module == "internal" {
+			continue
+		}
 		im := issuerModel{
 			Module: stringOrNull(iss.Module),
 			CA:     stringOrNull(iss.CA),
@@ -387,13 +432,12 @@ func tlsFromJSON(ctx context.Context, t *caddyjson.TLS) ([]tlsModel, diag.Diagno
 				OverrideDomain:     stringOrNull(iss.DNS.OverrideDomain),
 			}}
 		}
-		if iss.Module == "internal" {
-			m.Internal = types.BoolValue(true)
-			continue
-		}
-		m.Issuers = append(m.Issuers, im)
+		out = append(out, im)
 	}
-	return []tlsModel{m}, diags
+	if len(out) == 0 {
+		return nil, diags
+	}
+	return out, diags
 }
 
 func policyToTLS(p caddyjson.Policy) *caddyjson.TLS {

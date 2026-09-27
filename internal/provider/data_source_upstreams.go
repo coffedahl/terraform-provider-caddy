@@ -38,7 +38,8 @@ func (d *upstreamsDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 		MarkdownDescription: "Live reverse_proxy upstream status from `GET /reverse_proxy/upstreams`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:            true,
+				MarkdownDescription: "Always `reverse_proxy/upstreams`.",
 			},
 			"json": schema.StringAttribute{
 				Computed:            true,

@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -51,7 +52,8 @@ func (r *tlsPolicyResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"create per-site policies automatically.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:            true,
+				MarkdownDescription: "Caddy `@id`, equal to `name`.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -95,6 +97,10 @@ func (r *tlsPolicyResource) Create(ctx context.Context, req resource.CreateReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if err := ensureAbsent(ctx, r.client, "caddy_tls_policy", data.Name.ValueString()); err != nil {
+		resp.Diagnostics.AddError("Create caddy_tls_policy", err.Error())
+		return
+	}
 	if err := r.apply(ctx, data); err != nil {
 		resp.Diagnostics.AddError("Create caddy_tls_policy", err.Error())
 		return
@@ -130,30 +136,35 @@ func (r *tlsPolicyResource) Read(ctx context.Context, req resource.ReadRequest, 
 	data.Name = types.StringValue(pol.Name)
 	data.ID = data.Name
 
-	issuers := make([]issuerModel, 0, len(pol.Issuers))
-	tls, d := tlsFromJSON(ctx, policyToTLS(pol))
+	issuers, d := issuersFromJSON(ctx, pol.Issuers, false)
 	resp.Diagnostics.Append(d...)
-	if len(tls) == 1 {
-		issuers = tls[0].Issuers
-	}
 	data.Issuers = issuers
 
-	if ask := r.readAsk(ctx); ask != "" && pol.OnDemand {
-		data.Ask = types.StringValue(ask)
+	// ask lives in global on-demand config, so only track it when this
+	// policy set it; otherwise another policy's ask would show as drift.
+	if !data.Ask.IsNull() {
+		data.Ask = stringOrNull(r.readAsk(ctx))
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *tlsPolicyResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data tlsPolicyModel
+	var data, prior tlsPolicyModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	if err := r.apply(ctx, data); err != nil {
 		resp.Diagnostics.AddError("Update caddy_tls_policy", err.Error())
 		return
+	}
+	if old := prior.Ask.ValueString(); old != "" && data.Ask.ValueString() == "" {
+		if err := r.removeAsk(ctx, old); err != nil {
+			resp.Diagnostics.AddError("Update caddy_tls_policy: remove ask", err.Error())
+			return
+		}
 	}
 	data.ID = data.Name
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -165,9 +176,28 @@ func (r *tlsPolicyResource) Delete(ctx context.Context, req resource.DeleteReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := removeArrayID(ctx, r.client, tlsPoliciesPath(), data.Name.ValueString()); err != nil && !client.IsNotFound(err) {
+	if err := removeArrayID(ctx, r.client, tlsPoliciesPath(), data.Name.ValueString()); err != nil && !client.IsMissing(err) {
 		resp.Diagnostics.AddError("Delete caddy_tls_policy", err.Error())
+		return
 	}
+	if ask := data.Ask.ValueString(); ask != "" {
+		if err := r.removeAsk(ctx, ask); err != nil {
+			resp.Diagnostics.AddError("Delete caddy_tls_policy: remove ask", err.Error())
+		}
+	}
+}
+
+// removeAsk deletes the global on-demand config, but only while it still
+// points at ask, so a value set by someone else is left alone.
+func (r *tlsPolicyResource) removeAsk(ctx context.Context, ask string) error {
+	if r.readAsk(ctx) != ask {
+		return nil
+	}
+	err := r.client.Delete(ctx, onDemandPath)
+	if client.IsMissing(err) {
+		return nil
+	}
+	return err
 }
 
 func (r *tlsPolicyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -201,7 +231,7 @@ func (r *tlsPolicyResource) ImportState(ctx context.Context, req resource.Import
 }
 
 func (r *tlsPolicyResource) readAsk(ctx context.Context) string {
-	raw, _, err := r.client.Get(ctx, "/config/apps/tls/automation/on_demand")
+	raw, _, err := r.client.Get(ctx, onDemandPath)
 	if err != nil {
 		return ""
 	}
@@ -212,6 +242,8 @@ func (r *tlsPolicyResource) readAsk(ctx context.Context) string {
 	ask, _ := obj["ask"].(string)
 	return ask
 }
+
+const onDemandPath = "/config/apps/tls/automation/on_demand"
 
 func findPolicy(list []map[string]any, ref string) (map[string]any, int, error) {
 	if idx, ok := caddyjson.ParseIndex(ref); ok {
@@ -272,11 +304,18 @@ func (r *tlsPolicyResource) apply(ctx context.Context, data tlsPolicyModel) erro
 	if err != nil {
 		return err
 	}
-	if err := upsertArray(ctx, r.client, tlsPoliciesPath(), data.Name.ValueString(), policy, 0); err != nil {
+	// Caddy uses the first policy that matches, so a catch-all policy (no
+	// subjects) goes last or it would shadow every site-specific policy.
+	insertAt := 0
+	if len(subjects) == 0 {
+		insertAt = math.MaxInt32
+	}
+	if err := upsertArray(ctx, r.client, tlsPoliciesPath(), data.Name.ValueString(), policy, insertAt); err != nil {
 		return err
 	}
 	if ask := data.Ask.ValueString(); ask != "" {
-		return r.client.Put(ctx, "/config/apps/tls/automation/on_demand", caddyjson.OnDemandAskConfig(ask))
+		// POST sets or replaces; PUT would fail once on_demand exists.
+		return r.client.Post(ctx, onDemandPath, caddyjson.OnDemandAskConfig(ask))
 	}
 	return nil
 }
