@@ -42,6 +42,19 @@ func loadPolicies(ctx context.Context, c *client.Client) ([]map[string]any, erro
 	return caddyjson.DecodeObjectList(raw)
 }
 
+// ensureAbsent fails when Caddy already has an object with @id, so Create
+// never silently takes over config that OpenTofu does not manage yet.
+func ensureAbsent(ctx context.Context, c *client.Client, kind, id string) error {
+	_, _, err := c.GetID(ctx, id)
+	if err == nil {
+		return fmt.Errorf("an object with @id %q already exists in Caddy; import it with `tofu import %s.<name> %s` instead of creating it", id, kind, id)
+	}
+	if client.IsMissing(err) {
+		return nil
+	}
+	return err
+}
+
 func findServerRoute(objs map[string]map[string]any, server, ref string) (map[string]any, int, error) {
 	obj, ok := objs[server]
 	if !ok {

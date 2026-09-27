@@ -43,7 +43,8 @@ func (p *caddyProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 			"endpoint": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "Caddy Admin API address. Accepts `http://127.0.0.1:2019` (default), " +
-					"`https://...` for remote admin, or `unix:///run/caddy/admin.sock`. " +
+					"`unix:///run/caddy/admin.sock`, or `https://...` for an admin API behind a TLS reverse proxy. " +
+					"Caddy's built-in remote admin (mutual TLS) is not supported yet. " +
 					"May also be set with `CADDY_ENDPOINT` or `CADDY_ADMIN`.",
 			},
 		},
@@ -54,6 +55,16 @@ func (p *caddyProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	var data caddyProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if data.Endpoint.IsUnknown() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("endpoint"),
+			"Unknown Caddy endpoint",
+			"The endpoint depends on a value that is not known until apply. "+
+				"Set it to a static value or use the CADDY_ENDPOINT environment variable.",
+		)
 		return
 	}
 
@@ -86,11 +97,16 @@ func (p *caddyProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	if err := c.EnsurePersist(ctx); err != nil {
+	if persist, err := c.PersistEnabled(ctx); err != nil || !persist {
+		detail := "Caddy has admin.config.persist set to false."
+		if err != nil {
+			detail = "Could not read admin.config.persist: " + err.Error()
+		}
 		resp.Diagnostics.AddWarning(
-			"Could not enable Caddy config persistence",
-			err.Error()+"\nAPI changes are stored in Caddy's autosave.json only if persist is on. "+
-				"Start Caddy with `caddy run --resume` (not a Caddyfile reload) or API routes disappear on restart.",
+			"Caddy config persistence is off",
+			detail+"\nAPI changes are saved to Caddy's autosave.json only when persist is on. "+
+				"Without it, resources managed here disappear when Caddy restarts. "+
+				"Enable persist and start Caddy with `caddy run --resume`.",
 		)
 	}
 

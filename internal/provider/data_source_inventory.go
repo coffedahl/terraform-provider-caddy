@@ -65,7 +65,7 @@ func (d *inventoryDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 			"`import_commands` are ready-to-run lines. Routes without `@id` are addressed as `{server}/{index}`; " +
 			"importing a site stamps an `@id` onto the live route so later applies can find it.",
 		Attributes: map[string]schema.Attribute{
-			"id": schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true, MarkdownDescription: "Always `inventory`."},
 			"import_commands": schema.ListAttribute{
 				Computed:            true,
 				ElementType:         types.StringType,

@@ -1,0 +1,38 @@
+---
+page_title: "{{ .Name }} {{ .Type }} - {{ .ProviderName }}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{ .Type }}: {{ .Name }}
+
+Lists HTTP servers, top-level routes (sites), and TLS policies on a running Caddy. Use `import_commands` or each route's `import_id` with `tofu import`.
+
+Routes that came from a Caddyfile usually have no `@id`. Importing a site with `{server}/{index}` stamps an `@id` onto the live route so later applies can find it.
+
+## Example Usage
+
+{{ tffile .ExampleFile }}
+
+```shell
+tofu import caddy_server.https srv0
+tofu import caddy_site.apps srv0/0
+tofu import caddy_tls_policy.wildcard 0
+```
+
+OpenTofu 1.5+ import blocks:
+
+```terraform
+import {
+  to = caddy_server.https
+  id = "srv0"
+}
+
+import {
+  to = caddy_site.apps
+  id = "srv0/0"
+}
+```
+
+{{ .SchemaMarkdown | trimspace }}

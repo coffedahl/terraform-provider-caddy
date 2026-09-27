@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -101,12 +104,18 @@ func (r *handleResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		},
 		"site_id": schema.StringAttribute{
 			Required:            true,
-			MarkdownDescription: "`name`/`id` of the parent `caddy_site`.",
+			MarkdownDescription: "`name`/`id` of the parent `caddy_site`. Changing this forces replacement.",
+			PlanModifiers: []planmodifier.String{
+				stringplanmodifier.RequiresReplace(),
+			},
 		},
 		"priority": schema.Int64Attribute{
 			Optional:            true,
 			Computed:            true,
 			MarkdownDescription: "Optional 0-based insert index among sibling handles. Omit this so existing order is kept; Caddy has no priority field of its own.",
+			Validators: []validator.Int64{
+				int64validator.AtLeast(0),
+			},
 			PlanModifiers: []planmodifier.Int64{
 				int64planmodifier.UseStateForUnknown(),
 			},
@@ -142,13 +151,17 @@ func (r *handleResource) Create(ctx context.Context, req resource.CreateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if err := ensureAbsent(ctx, r.client, "caddy_handle", data.Name.ValueString()); err != nil {
+		resp.Diagnostics.AddError("Create caddy_handle", err.Error())
+		return
+	}
 	index, err := r.upsert(ctx, data, configInsertIndex(config.Priority))
 	if err != nil {
 		resp.Diagnostics.AddError("Create caddy_handle", err.Error())
 		return
 	}
 	data.ID = data.Name
-	data.Priority = types.Int64Value(int64(index))
+	data.Priority = appliedPriority(config.Priority, index)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -170,6 +183,12 @@ func (r *handleResource) Read(ctx context.Context, req resource.ReadRequest, res
 		resp.State.RemoveResource(ctx)
 		return
 	}
+	_, _, siteRoute, err := findRouteByID(objs, siteID)
+	if err != nil {
+		resp.Diagnostics.AddError("Read caddy_handle", err.Error())
+		return
+	}
+	siblings := len(caddyjson.SubrouteRoutes(siteRoute))
 	parsed, err := caddyjson.ParseHandle(handle)
 	if err != nil {
 		resp.Diagnostics.AddError("Parse caddy_handle", err.Error())
@@ -183,7 +202,7 @@ func (r *handleResource) Read(ctx context.Context, req resource.ReadRequest, res
 	data.fromHandle(model)
 	data.Name = types.StringValue(parsed.ID)
 	data.SiteID = types.StringValue(siteID)
-	data.Priority = types.Int64Value(int64(index))
+	data.Priority = settledPriority(data.Priority, index, siblings)
 	data.ID = data.Name
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -201,7 +220,7 @@ func (r *handleResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 	data.ID = data.Name
-	data.Priority = types.Int64Value(int64(index))
+	data.Priority = appliedPriority(config.Priority, index)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -213,7 +232,7 @@ func (r *handleResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 	if err := r.mutateSite(ctx, data.SiteID.ValueString(), func(routes []map[string]any) []map[string]any {
 		return caddyjson.RemoveID(routes, data.Name.ValueString())
-	}); err != nil && !client.IsNotFound(err) {
+	}); err != nil && !client.IsMissing(err) {
 		resp.Diagnostics.AddError("Delete caddy_handle", err.Error())
 	}
 }
@@ -244,7 +263,7 @@ func (r *handleResource) ImportState(ctx context.Context, req resource.ImportSta
 
 	switch len(parts) {
 	case 1:
-		handle, siteID, handleIndex, err = locateHandle(objs, "", parts[0])
+		_, siteID, handleIndex, err = locateHandle(objs, "", parts[0])
 		if err != nil {
 			resp.Diagnostics.AddError("Import caddy_handle", err.Error())
 			return

@@ -12,6 +12,10 @@ Wildcard hostnames (`*.example.com`) are first-class: nested `handle` blocks bec
 
 DNS-01 (required for wildcards) needs a Caddy build that includes the matching [caddy-dns](https://github.com/caddy-dns) module.
 
-Use a unix socket admin endpoint in production.
+Use a unix socket admin endpoint in production. The provider does not install or start Caddy; persist API-applied config with `caddy run --resume`.
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
 
 {{ .SchemaMarkdown | trimspace }}

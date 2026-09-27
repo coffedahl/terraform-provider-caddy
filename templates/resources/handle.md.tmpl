@@ -1,0 +1,49 @@
+---
+page_title: "{{ .Name }} {{ .Type }} - {{ .ProviderName }}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{ .Type }}: {{ .Name }}
+
+A standalone handle attached to a `caddy_site` subroute. Use this with `for_each` when routes are dynamic. Nested `handle` blocks on `caddy_site` stay under `{site}__h*` ids and are not overwritten.
+
+## Example Usage
+
+{{ tffile .ExampleFile }}
+
+## Reverse proxy TLS (upstream)
+
+Caddyfile:
+
+```caddyfile
+reverse_proxy proxmox.home.lan:8006 {
+    transport http {
+        tls
+        tls_insecure_skip_verify
+    }
+}
+```
+
+OpenTofu:
+
+```hcl
+reverse_proxy {
+  upstream {
+    dial = "proxmox.home.lan:8006"
+  }
+  transport_tls            = true
+  tls_insecure_skip_verify = true
+}
+```
+
+`tls_insecure_skip_verify` implies TLS to the upstream. Optional: `tls_server_name`, `tls_client_certificate_file`, `tls_client_certificate_key_file`.
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+{{ codefile "shell" .ImportFile }}
+
+Prefer importing the parent `caddy_site` when handles should stay nested on that site.

@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -73,7 +76,10 @@ func (r *siteResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"server_id": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Name/`id` of the `caddy_server` this site is attached to.",
+				MarkdownDescription: "Name/`id` of the `caddy_server` this site is attached to. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"hosts": schema.ListAttribute{
 				Required:            true,
@@ -90,6 +96,9 @@ func (r *siteResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Optional 0-based insert index among the server's routes. Omit it to keep the current order.",
+				Validators: []validator.Int64{
+					int64validator.AtLeast(0),
+				},
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
 				},
@@ -110,13 +119,17 @@ func (r *siteResource) Create(ctx context.Context, req resource.CreateRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if err := ensureAbsent(ctx, r.client, "caddy_site", data.Name.ValueString()); err != nil {
+		resp.Diagnostics.AddError("Create caddy_site", err.Error())
+		return
+	}
 	index, err := r.apply(ctx, data, configInsertIndex(config.Priority))
 	if err != nil {
 		resp.Diagnostics.AddError("Create caddy_site", err.Error())
 		return
 	}
 	data.ID = data.Name
-	data.Priority = types.Int64Value(int64(index))
+	data.Priority = appliedPriority(config.Priority, index)
 	fillHandlePriorities(data.Handles)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -134,8 +147,10 @@ func (r *siteResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	var route map[string]any
-	index := -1
+	var (
+		route map[string]any
+		index int
+	)
 	server := data.ServerID.ValueString()
 	name := data.Name.ValueString()
 
@@ -170,7 +185,7 @@ func (r *siteResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	resp.Diagnostics.Append(d...)
 	data.Hosts = hosts
 	data.Terminal = types.BoolValue(parsed.Terminal)
-	data.Priority = types.Int64Value(int64(index))
+	data.Priority = settledPriority(data.Priority, index, len(objectListAny(objs[server]["routes"])))
 	data.ServerID = types.StringValue(server)
 	data.Name = types.StringValue(parsed.Name)
 	data.ID = data.Name
@@ -183,14 +198,15 @@ func (r *siteResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		model, d := handleFromJSON(ctx, h)
 		resp.Diagnostics.Append(d...)
 		model.Name = types.StringNull()
+		// Nested handles keep declaration order, so priority is the position.
+		model.Priority = types.Int64Value(int64(len(nested)))
 		nested = append(nested, model)
 	}
 	data.Handles = nested
 
-	if tls, d := r.readSiteTLS(ctx, data.Name.ValueString(), parsed.Hosts); tls != nil {
-		resp.Diagnostics.Append(d...)
-		data.TLS = tls
-	}
+	tls, d := r.readSiteTLS(ctx, data.Name.ValueString(), parsed.Hosts, len(data.TLS) > 0)
+	resp.Diagnostics.Append(d...)
+	data.TLS = tls
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -208,7 +224,7 @@ func (r *siteResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 	data.ID = data.Name
-	data.Priority = types.Int64Value(int64(index))
+	data.Priority = appliedPriority(config.Priority, index)
 	fillHandlePriorities(data.Handles)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -219,11 +235,17 @@ func (r *siteResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := removeArrayID(ctx, r.client, serverRoutesPath(data.ServerID.ValueString()), data.Name.ValueString()); err != nil && !client.IsNotFound(err) {
+	if err := removeArrayID(ctx, r.client, serverRoutesPath(data.ServerID.ValueString()), data.Name.ValueString()); err != nil && !client.IsMissing(err) {
 		resp.Diagnostics.AddError("Delete caddy_site", err.Error())
 		return
 	}
-	_ = r.client.DeleteID(ctx, caddyjson.TLSPolicyID(data.Name.ValueString()))
+	if err := r.client.DeleteID(ctx, caddyjson.TLSPolicyID(data.Name.ValueString())); err != nil && !client.IsMissing(err) {
+		resp.Diagnostics.AddError("Delete caddy_site: remove TLS policy", err.Error())
+		return
+	}
+	if err := removeLoadFile(ctx, r.client, data.Name.ValueString()); err != nil {
+		resp.Diagnostics.AddError("Delete caddy_site: remove certificate load_files entry", err.Error())
+	}
 }
 
 func (r *siteResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -275,10 +297,16 @@ func (r *siteResource) ImportState(ctx context.Context, req resource.ImportState
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("priority"), int64(index))...)
 }
 
-func (r *siteResource) readSiteTLS(ctx context.Context, siteName string, hosts []string) ([]tlsModel, diag.Diagnostics) {
+// readSiteTLS finds the site's automation policy. Matching by subjects is
+// only a fallback for sites that already have a tls block in state (such as
+// imported Caddyfile sites), so a separate caddy_tls_policy covering the same
+// hosts is never claimed by the site.
+func (r *siteResource) readSiteTLS(ctx context.Context, siteName string, hosts []string, hadTLS bool) ([]tlsModel, diag.Diagnostics) {
+	var diags diag.Diagnostics
 	list, err := loadPolicies(ctx, r.client)
-	if err != nil || len(list) == 0 {
-		return nil, nil
+	if err != nil {
+		diags.AddError("Read caddy_site TLS policy", err.Error())
+		return nil, diags
 	}
 	want := caddyjson.TLSPolicyID(siteName)
 	var match map[string]any
@@ -288,7 +316,7 @@ func (r *siteResource) readSiteTLS(ctx context.Context, siteName string, hosts [
 			break
 		}
 	}
-	if match == nil {
+	if match == nil && hadTLS {
 		for _, p := range list {
 			if sameStrings(caddyjson.ParsePolicy(p).Subjects, hosts) {
 				match = p
@@ -299,8 +327,36 @@ func (r *siteResource) readSiteTLS(ctx context.Context, siteName string, hosts [
 	if match == nil {
 		return nil, nil
 	}
-	pol := caddyjson.ParsePolicy(match)
-	return tlsFromJSON(ctx, policyToTLS(pol))
+	t := policyToTLS(caddyjson.ParsePolicy(match))
+	cert, key, err := r.readLoadFile(ctx, siteName)
+	if err != nil {
+		diags.AddError("Read caddy_site certificate", err.Error())
+		return nil, diags
+	}
+	t.CertificateFile, t.KeyFile = cert, key
+	return tlsFromJSON(ctx, t)
+}
+
+func (r *siteResource) readLoadFile(ctx context.Context, siteName string) (string, string, error) {
+	raw, _, err := r.client.Get(ctx, loadFilesPath)
+	if client.IsMissing(err) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	list, err := caddyjson.DecodeObjectList(raw)
+	if err != nil {
+		return "", "", err
+	}
+	for _, entry := range list {
+		if firstTag(entry) == siteName {
+			cert, _ := entry["certificate"].(string)
+			key, _ := entry["key"].(string)
+			return cert, key, nil
+		}
+	}
+	return "", "", nil
 }
 
 func sameStrings(a, b []string) bool {
@@ -401,8 +457,10 @@ func fillHandlePriorities(handles []handleModel) {
 
 func (r *siteResource) applyTLS(ctx context.Context, site caddyjson.Site) error {
 	if site.TLS == nil {
-		_ = r.client.DeleteID(ctx, caddyjson.TLSPolicyID(site.Name))
-		return nil
+		if err := r.client.DeleteID(ctx, caddyjson.TLSPolicyID(site.Name)); err != nil && !client.IsMissing(err) {
+			return err
+		}
+		return removeLoadFile(ctx, r.client, site.Name)
 	}
 	if err := r.client.EnsureTLSApp(ctx); err != nil {
 		return err

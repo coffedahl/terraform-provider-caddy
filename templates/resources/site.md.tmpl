@@ -1,0 +1,28 @@
+---
+page_title: "{{ .Name }} {{ .Type }} - {{ .ProviderName }}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{ .Type }}: {{ .Name }}
+
+A Caddy site is a top-level host matcher wrapping nested handles in a `subroute`. Use `hosts = ["*.example.com"]` for a wildcard certificate covering one DNS label, then put per-path or per-subdomain routes in `handle` blocks.
+
+Automatic HTTPS is used unless `tls` is set. Wildcard certificates require `tls.issuer.dns` and a Caddy build that includes that DNS module.
+
+Exact hosts should use a lower `priority` than wildcards so they match first. Nested `handle` blocks keep declaration order inside the site.
+
+## Example Usage
+
+{{ tffile .ExampleFile }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Caddyfile-managed routes usually have no `@id`. Import by server key and route index; the provider stamps an `@id` onto the live route.
+
+{{ codefile "shell" .ImportFile }}
+
+Use `data.caddy_inventory.live` to list `import_id` values on a running instance.

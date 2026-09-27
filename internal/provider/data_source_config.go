@@ -40,7 +40,8 @@ func (d *configDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 		MarkdownDescription: "Read a slice of the live Caddy JSON config. Useful for debugging and drift inspection.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:            true,
+				MarkdownDescription: "Same as `path`.",
 			},
 			"path": schema.StringAttribute{
 				Optional:            true,
