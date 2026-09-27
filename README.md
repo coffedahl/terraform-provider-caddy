@@ -1,5 +1,12 @@
 # terraform-provider-caddy
 
+> [!WARNING]
+> **This project is vibe-coded and is not intended for production use.**
+>
+> Most of this provider was written with AI assistance, and it has not had an independent security or code review. It changes and deletes live Caddy configuration through the Admin API, so a bug can take your sites offline or change how TLS certificates are issued.
+>
+> If you use it anyway, audit the code yourself first, test it against a disposable Caddy instance, and keep backups of your Caddy config. It comes with no warranty; see the [license](LICENSE).
+
 OpenTofu/Terraform provider for [Caddy 2](https://caddyserver.com/). It manages a running Caddy instance through the [Admin API](https://caddyserver.com/docs/api), compiling HCL that looks like a Caddyfile into Caddy's native JSON config.
 
 Use it to declare HTTP servers, wildcard (and ordinary) sites, nested routes, reverse proxies, file serving, and TLS — including DNS-01 for wildcard certificates.

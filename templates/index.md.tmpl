@@ -6,6 +6,13 @@ description: |-
 
 # Caddy Provider
 
+> [!WARNING]
+> **This project is vibe-coded and is not intended for production use.**
+>
+> Most of this provider was written with AI assistance, and it has not had an independent security or code review. It changes and deletes live Caddy configuration through the Admin API, so a bug can take your sites offline or change how TLS certificates are issued.
+>
+> If you use it anyway, audit the code yourself first, test it against a disposable Caddy instance, and keep backups of your Caddy config. It comes with no warranty; see the [license](https://github.com/coffedahl/terraform-provider-caddy/blob/master/LICENSE).
+
 The Caddy provider configures a running [Caddy](https://caddyserver.com/) 2 process using its [Admin API](https://caddyserver.com/docs/api). HCL follows Caddyfile concepts (site, handle, matchers, tls) and is compiled to Caddy JSON. Every managed object has an `@id`.
 
 Wildcard hostnames (`*.example.com`) are first-class: nested `handle` blocks become a `subroute` so the wildcard host matcher stays at the top level, which is what Caddy needs for automatic HTTPS and wildcard certificates.
